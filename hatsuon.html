@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>はっせいれんしゅう</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+body { background: #f5f0ff; font-family: 'Hiragino Sans','Yu Gothic',sans-serif; min-height: 100vh; }
+button { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+// ひらがな行フィルター用マップ
+const KANA_FILTER_MAP = {
+  "あ行": "あいうえお",
+  "か行": "かきくけこがぎぐげご",
+  "さ行": "さしすせそざじずぜぞ",
+  "た行": "たちつてとだぢづでど",
+  "な行": "なにぬねの",
+  "は行": "はひふへほばびぶべぼぱぴぷぺぽ",
+  "ま行": "まみむめも",
+  "や行": "やゆよゃゅょ",
+  "ら行": "らりるれろ",
+  "わ行": "わをん",
+  "その他": "っぁぃぅぇぉーー？！〜。、…",
+};
+
+function getRowLabel(word) {
+  const c = word[0];
+  for (const [label, chars] of Object.entries(KANA_FILTER_MAP)) {
+    if (chars.includes(c)) return label;
+  }
+  return "その他";
+}
+
+const KANA_ROWS = [
+  { row: "あ行", color: "#FF6B9D", kana: [
+    { char: "あ", emoji: "🍭", label: "あめ" },{ char: "い", emoji: "🐶", label: "いぬ" },
+    { char: "う", emoji: "🐴", label: "うま" },{ char: "え", emoji: "✏️", label: "えんぴつ" },
+    { char: "お", emoji: "🍱", label: "おべんとう" }]},
+  { row: "か行", color: "#FF9F43",
+    kana: [{ char: "か", emoji: "🦀", label: "かに" },{ char: "き", emoji: "🌳", label: "き" },{ char: "く", emoji: "🚗", label: "くるま" },{ char: "け", emoji: "🎂", label: "けーき" },{ char: "こ", emoji: "🐻", label: "こぐま" }],
+    dakuten: [{ char: "が", emoji: "🐸", label: "がま" },{ char: "ぎ", emoji: "🎸", label: "ぎたー" },{ char: "ぐ", emoji: "🥊", label: "ぐーす" },{ char: "げ", emoji: "🎮", label: "げーむ" },{ char: "ご", emoji: "🍚", label: "ごはん" }]},
+  { row: "さ行", color: "#c8b800",
+    kana: [{ char: "さ", emoji: "🐟", label: "さかな" },{ char: "し", emoji: "🦁", label: "しし" },{ char: "す", emoji: "🍉", label: "すいか" },{ char: "せ", emoji: "🧼", label: "せっけん" },{ char: "そ", emoji: "🌌", label: "そら" }],
+    dakuten: [{ char: "ざ", emoji: "📓", label: "ざっし" },{ char: "じ", emoji: "🚲", label: "じてんしゃ" },{ char: "ず", emoji: "📖", label: "ずかん" },{ char: "ぜ", emoji: "🍮", label: "ぜりー" },{ char: "ぞ", emoji: "🐘", label: "ぞう" }]},
+  { row: "た行", color: "#66BB6A",
+    kana: [{ char: "た", emoji: "🥚", label: "たまご" },{ char: "ち", emoji: "🦋", label: "ちょうちょ" },{ char: "つ", emoji: "🌙", label: "つき" },{ char: "て", emoji: "🖐️", label: "て" },{ char: "と", emoji: "🐯", label: "とら" }],
+    dakuten: [{ char: "だ", emoji: "🥁", label: "だいこ" },{ char: "ぢ", emoji: "🗺️", label: "ちず" },{ char: "づ", emoji: "🎵", label: "づつみ" },{ char: "で", emoji: "🚂", label: "でんしゃ" },{ char: "ど", emoji: "🚪", label: "どあ" }]},
+  { row: "な行", color: "#42A5F5", kana: [
+    { char: "な", emoji: "🍆", label: "なす" },{ char: "に", emoji: "🌈", label: "にじ" },
+    { char: "ぬ", emoji: "🧶", label: "ぬいぐるみ" },{ char: "ね", emoji: "🐱", label: "ねこ" },{ char: "の", emoji: "🌾", label: "のはら" }]},
+  { row: "は行", color: "#AB47BC",
+    kana: [{ char: "は", emoji: "🌸", label: "はな" },{ char: "ひ", emoji: "☀️", label: "ひ" },{ char: "ふ", emoji: "🚢", label: "ふね" },{ char: "へ", emoji: "🐍", label: "へび" },{ char: "ほ", emoji: "⭐", label: "ほし" }],
+    dakuten: [{ char: "ば", emoji: "🍌", label: "ばなな" },{ char: "び", emoji: "🎻", label: "びおら" },{ char: "ぶ", emoji: "🐷", label: "ぶた" },{ char: "べ", emoji: "🔔", label: "べる" },{ char: "ぼ", emoji: "⛵", label: "ぼーと" }],
+    handakuten: [{ char: "ぱ", emoji: "🍕", label: "ぱん" },{ char: "ぴ", emoji: "🐧", label: "ぴかちゅ" },{ char: "ぷ", emoji: "🍮", label: "ぷりん" },{ char: "ぺ", emoji: "🖊️", label: "ぺん" },{ char: "ぽ", emoji: "🫐", label: "ぽけっと" }]},
+  { row: "ま行", color: "#26C6DA", kana: [
+    { char: "ま", emoji: "🎠", label: "まり" },{ char: "み", emoji: "🍊", label: "みかん" },
+    { char: "む", emoji: "🐛", label: "むし" },{ char: "め", emoji: "👁️", label: "め" },{ char: "も", emoji: "🍑", label: "もも" }]},
+  { row: "や行", color: "#EF5350",
+    kana: [{ char: "や", emoji: "🏔️", label: "やま" },{ char: "ゆ", emoji: "🛁", label: "ゆ" },{ char: "よ", emoji: "🌙", label: "よる" }],
+    small: [{ char: "ゃ", emoji: "🏔️", label: "（小）や" },{ char: "ゅ", emoji: "🛁", label: "（小）ゆ" },{ char: "ょ", emoji: "🌙", label: "（小）よ" }]},
+  { row: "ら行", color: "#FF7043", kana: [
+    { char: "ら", emoji: "🦁", label: "らいおん" },{ char: "り", emoji: "🍎", label: "りんご" },
+    { char: "る", emoji: "💎", label: "るびー" },{ char: "れ", emoji: "🧱", label: "れんが" },{ char: "ろ", emoji: "🕯️", label: "ろうそく" }]},
+  { row: "わ行", color: "#26A69A", kana: [
+    { char: "わ", emoji: "🐊", label: "わに" },{ char: "を", emoji: "🎯", label: "を" },{ char: "ん", emoji: "🔔", label: "ん" }]},
+  { row: "小文字", color: "#7E57C2", kana: [
+    { char: "っ", emoji: "⚡", label: "（小）つ" },{ char: "ぁ", emoji: "🍭", label: "（小）あ" },
+    { char: "ぃ", emoji: "🐶", label: "（小）い" },{ char: "ぅ", emoji: "🐴", label: "（小）う" },
+    { char: "ぇ", emoji: "✏️", label: "（小）え" },{ char: "ぉ", emoji: "🍱", label: "（小）お" }]},
+  { row: "きごう", color: "#78909C", kana: [
+    { char: "ー", emoji: "➡️", label: "のばす" },{ char: "？", emoji: "❓", label: "はてな" },
+    { char: "！", emoji: "❗", label: "びっくり" },{ char: "〜", emoji: "🌊", label: "なみ" },
+    { char: "。", emoji: "🔵", label: "まる" },{ char: "、", emoji: "🔹", label: "てん" },
+    { char: "…", emoji: "💬", label: "てんてん" }]},
+];
+
+function speak(text, rate) {
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "ja-JP"; u.rate = rate; u.pitch = 1.1; u.volume = 1;
+  const v = window.speechSynthesis.getVoices().find(v => v.lang === "ja-JP" || v.lang === "ja_JP");
+  if (v) u.voice = v;
+  window.speechSynthesis.speak(u);
+}
+
+function KanaGroup({ items, color, flash, onPress }) {
+  return (
+    <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+      {items.map(item => {
+        const f = flash === item.char;
+        return (
+          <button key={item.char} onClick={() => onPress(item.char)} style={{
+            width:62, height:72, background: f ? "#fff9c4":"#fff",
+            border:`3px solid ${color}`, borderRadius:14, cursor:"pointer",
+            display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:1,
+            boxShadow: f ? `0 0 0 4px ${color}88`:`0 3px 8px ${color}40`,
+            transform: f ? "scale(0.91)":"scale(1)", transition:"all 0.12s", userSelect:"none",
+          }}>
+            <span style={{ fontSize:22 }}>{item.emoji}</span>
+            <span style={{ fontSize:24, fontWeight:900, color, lineHeight:1.1 }}>{item.char}</span>
+            <span style={{ fontSize:8, color:"#aaa", maxWidth:58, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{item.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const SPEEDS = [
+  { label:"とても\nゆっくり", value:0.5 },
+  { label:"ゆっくり",        value:0.7 },
+  { label:"ふつう",          value:1.0 },
+  { label:"はやい",          value:1.3 },
+];
+
+const FILTER_LABELS = ["すべて","あ行","か行","さ行","た行","な行","は行","ま行","や行","ら行","わ行","その他"];
+
+function App() {
+  const [slots, setSlots]     = useState([]);
+  const [favs, setFavs]       = useState(() => { try { return JSON.parse(localStorage.getItem("fav3")||"[]");  } catch { return []; } });
+  const [pics, setPics]       = useState(() => { try { return JSON.parse(localStorage.getItem("pics1")||"{}"); } catch { return {}; } });
+  const [newWord, setNewWord] = useState("");
+  const [picMsg, setPicMsg]   = useState("");
+  const [tab, setTab]         = useState("kana");
+  const [openRow, setOpenRow] = useState(null);
+  const [flash, setFlash]     = useState(null);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed]     = useState(0.7);
+  const [favOpen, setFavOpen] = useState(true);
+  const [favFilter, setFavFilter] = useState("すべて"); // フィルター
+  const [sortMode, setSortMode]   = useState(false);    // 並び替えモード
+
+  useEffect(() => { window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices(); window.speechSynthesis.getVoices(); }, []);
+  useEffect(() => { try { localStorage.setItem("fav3",  JSON.stringify(favs)); } catch {} }, [favs]);
+  useEffect(() => { try { localStorage.setItem("pics1", JSON.stringify(pics)); } catch {} }, [pics]);
+
+  const handlePicUpload = (e) => {
+    const file = e.target.files[0], word = newWord.trim();
+    if (!file || !word) { setPicMsg("ことばと写真の両方を選んでね"); return; }
+    if (file.size > 1.5*1024*1024) { setPicMsg("写真が大きすぎます（1.5MB以下にしてね）"); return; }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setPics(p => ({ ...p, [word]: ev.target.result }));
+      setNewWord(""); setPicMsg(`「${word}」を登録しました！`);
+      e.target.value = ""; setTimeout(() => setPicMsg(""), 2500);
+    };
+    reader.readAsDataURL(file);
+  };
+  const removePic = (word) => setPics(p => { const n={...p}; delete n[word]; return n; });
+
+  const pressKana = (c) => {
+    speak(c, speed); setFlash(c); setTimeout(() => setFlash(null), 300);
+    if (slots.length < 12) setSlots(p => [...p, c]);
+  };
+  const removeSlot = (i) => setSlots(p => p.filter((_,j) => j!==i));
+  const speakWord = () => {
+    if (!slots.length) return;
+    setPlaying(true); speak(slots.join(""), speed);
+    setTimeout(() => setPlaying(false), slots.length*700+600);
+  };
+  const addFav = () => {
+    const w = slots.join(""); if (!w || favs.find(f=>f.word===w)) return;
+    setFavs(p => [...p, { word:w, chars:[...slots], id:Date.now() }]);
+  };
+
+  // 並び替え
+  const moveUp   = (idx) => { if (idx===0) return; const a=[...favs]; [a[idx-1],a[idx]]=[a[idx],a[idx-1]]; setFavs(a); };
+  const moveDown = (idx) => { if (idx===favs.length-1) return; const a=[...favs]; [a[idx],a[idx+1]]=[a[idx+1],a[idx]]; setFavs(a); };
+
+  // フィルター適用（並び替えモード中はフィルターなし）
+  const filteredFavs = sortMode
+    ? favs.map((f,i) => ({...f, _origIdx:i}))
+    : (favFilter === "すべて"
+        ? favs.map((f,i) => ({...f, _origIdx:i}))
+        : favs.map((f,i) => ({...f, _origIdx:i})).filter(f => getRowLabel(f.word) === favFilter));
+
+  // フィルターに実際に該当する行ラベルだけ表示
+  const usedLabels = ["すべて", ...FILTER_LABELS.slice(1).filter(l => favs.some(f => getRowLabel(f.word) === l))];
+
+  return (
+    <div style={{ minHeight:"100vh", background:"#f5f0ff", paddingBottom:48 }}>
+
+      {/* ヘッダー */}
+      <div style={{ background:"linear-gradient(90deg,#ff7eb3,#ff9a3c)", padding:"14px 18px 12px", boxShadow:"0 4px 16px rgba(255,100,150,0.35)", display:"flex", alignItems:"center", gap:12 }}>
+        <span style={{ fontSize:30 }}>🎤</span>
+        <div>
+          <div style={{ color:"#fff", fontSize:20, fontWeight:900, letterSpacing:2 }}>はっせいれんしゅう</div>
+          <div style={{ color:"rgba(255,255,255,0.85)", fontSize:11 }}>ひらがなをおして ことばをつくろう！</div>
+        </div>
+      </div>
+
+      {/* ⭐ お気に入りセクション */}
+      <div style={{ margin:"14px 12px 0", background:"linear-gradient(135deg,#fff0f6,#fff)", borderRadius:22, boxShadow:"0 4px 20px rgba(233,30,99,0.15)", border:"3px solid #f48fb1", overflow:"hidden" }}>
+
+        {/* ヘッダー行 */}
+        <div style={{ display:"flex", alignItems:"center", padding:"12px 16px 10px", gap:8 }}>
+          <button onClick={() => setFavOpen(o=>!o)} style={{ flex:1, background:"none", border:"none", cursor:"pointer", display:"flex", alignItems:"center", gap:10, padding:0 }}>
+            <span style={{ fontSize:26 }}>⭐</span>
+            <div style={{ textAlign:"left" }}>
+              <div style={{ fontSize:18, fontWeight:900, color:"#e91e63" }}>お気に入り</div>
+              <div style={{ fontSize:11, color:"#f48fb1" }}>{favs.length > 0 ? `${favs.length}こ登録中` : "まだ登録がありません"}</div>
+            </div>
+            <span style={{ fontSize:16, color:"#f48fb1", fontWeight:700, marginLeft:4 }}>{favOpen ? "▲":"▼"}</span>
+          </button>
+          {/* 並び替えモードトグル */}
+          {favs.length > 1 && favOpen && (
+            <button onClick={() => { setSortMode(s=>!s); setFavFilter("すべて"); }} style={{
+              padding:"6px 12px", borderRadius:20,
+              background: sortMode ? "linear-gradient(135deg,#ff9a3c,#ff7043)":"#fff0e0",
+              color: sortMode ? "#fff":"#ff9a3c",
+              border:`2px solid #ff9a3c`, fontSize:12, fontWeight:800, cursor:"pointer",
+              whiteSpace:"nowrap",
+            }}>{sortMode ? "✅ 完了":"↕️ 並び替え"}</button>
+          )}
+        </div>
+
+        {favOpen && (
+          <div style={{ padding:"0 12px 14px" }}>
+
+            {/* フィルターバー（並び替えモード以外） */}
+            {!sortMode && favs.length > 0 && usedLabels.length > 2 && (
+              <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:10, marginBottom:4 }}>
+                {usedLabels.map(label => (
+                  <button key={label} onClick={() => setFavFilter(label)} style={{
+                    padding:"5px 12px", borderRadius:20, whiteSpace:"nowrap",
+                    background: favFilter===label ? "linear-gradient(135deg,#f48fb1,#e91e63)":"#fff",
+                    color: favFilter===label ? "#fff":"#e91e63",
+                    border:`2px solid ${favFilter===label ? "#e91e63":"#f8bbd0"}`,
+                    fontSize:12, fontWeight:800, cursor:"pointer",
+                    boxShadow: favFilter===label ? "0 2px 8px rgba(233,30,99,0.3)":"none",
+                  }}>{label}</button>
+                ))}
+              </div>
+            )}
+
+            {/* リスト */}
+            {!favs.length ? (
+              <div style={{ textAlign:"center", padding:"16px 0", color:"#f8bbd0", fontSize:13 }}>
+                ことばをつくって「⭐ お気に入り」をおしてね！
+              </div>
+            ) : filteredFavs.length === 0 ? (
+              <div style={{ textAlign:"center", padding:"16px 0", color:"#f8bbd0", fontSize:13 }}>
+                この行の登録はありません
+              </div>
+            ) : (
+              <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
+                {filteredFavs.map((fav, i) => {
+                  const origIdx = fav._origIdx;
+                  return (
+                    <div key={fav.id} style={{
+                      background:"#fff", borderRadius:18, padding:"12px 14px",
+                      display:"flex", alignItems:"center", gap:8,
+                      boxShadow:"0 3px 12px rgba(233,30,99,0.1)", border:"2px solid #fce4ec",
+                      position:"relative",
+                    }}>
+                      {/* 削除ボタン（並び替えモード以外） */}
+                      {!sortMode && (
+                        <button onClick={() => setFavs(p => p.filter(f=>f.id!==fav.id))} style={{
+                          position:"absolute", top:7, right:9, width:24, height:24,
+                          background:"#ffcdd2", border:"none", borderRadius:"50%",
+                          color:"#e53935", fontSize:13, fontWeight:900, cursor:"pointer",
+                          display:"flex", alignItems:"center", justifyContent:"center",
+                        }}>✕</button>
+                      )}
+
+                      {/* 並び替えボタン */}
+                      {sortMode && (
+                        <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                          <button onClick={() => moveUp(origIdx)} disabled={origIdx===0} style={{
+                            width:36, height:36, borderRadius:10, border:"none",
+                            background: origIdx===0 ? "#f5f5f5":"linear-gradient(135deg,#90caf9,#1976d2)",
+                            color: origIdx===0 ? "#ccc":"#fff", fontSize:16, cursor: origIdx===0 ? "default":"pointer",
+                            display:"flex", alignItems:"center", justifyContent:"center",
+                            boxShadow: origIdx===0 ? "none":"0 2px 6px rgba(25,118,210,0.35)",
+                          }}>▲</button>
+                          <button onClick={() => moveDown(origIdx)} disabled={origIdx===favs.length-1} style={{
+                            width:36, height:36, borderRadius:10, border:"none",
+                            background: origIdx===favs.length-1 ? "#f5f5f5":"linear-gradient(135deg,#90caf9,#1976d2)",
+                            color: origIdx===favs.length-1 ? "#ccc":"#fff", fontSize:16, cursor: origIdx===favs.length-1 ? "default":"pointer",
+                            display:"flex", alignItems:"center", justifyContent:"center",
+                            boxShadow: origIdx===favs.length-1 ? "none":"0 2px 6px rgba(25,118,210,0.35)",
+                          }}>▼</button>
+                        </div>
+                      )}
+
+                      {/* 単語 */}
+                      <div style={{ flex:1, fontSize:26, fontWeight:900, color:"#e91e63", letterSpacing:3, paddingRight: sortMode ? 0:20 }}>{fav.word}</div>
+
+                      {/* 読む */}
+                      <button onClick={() => speak(fav.word, speed)} style={{
+                        width:48, height:48, background:"linear-gradient(135deg,#42a5f5,#1565c0)",
+                        border:"none", borderRadius:13, color:"#fff", fontSize:21, cursor:"pointer",
+                        boxShadow:"0 3px 10px rgba(66,165,245,0.4)", display:"flex", alignItems:"center", justifyContent:"center",
+                      }}>🔊</button>
+
+                      {/* 編集（並び替えモード以外） */}
+                      {!sortMode && (
+                        <button onClick={() => setSlots([...fav.chars])} style={{
+                          width:48, height:48, background:"linear-gradient(135deg,#66bb6a,#2e7d32)",
+                          border:"none", borderRadius:13, color:"#fff", fontSize:19, cursor:"pointer",
+                          boxShadow:"0 3px 10px rgba(102,187,106,0.4)", display:"flex", alignItems:"center", justifyContent:"center",
+                        }}>✏️</button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ことばエリア */}
+      <div style={{ margin:"12px 12px 10px", background:"#fff", borderRadius:22, padding:"14px 16px", boxShadow:"0 4px 20px rgba(0,0,0,0.08)", border:"3px solid #ffe0b2" }}>
+        <div style={{ fontSize:12, color:"#ff9a3c", fontWeight:700, marginBottom:8 }}>🌟 つくったことば</div>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:7, minHeight:52, alignItems:"center" }}>
+          {!slots.length
+            ? <span style={{ color:"#ddd", fontSize:15 }}>ひらがなをえらんでね 👇</span>
+            : slots.map((c,i) => (
+              <button key={i} onClick={() => removeSlot(i)} style={{
+                width:48, height:48, borderRadius:14,
+                background:"linear-gradient(135deg,#ffe082,#ffb74d)",
+                border:"none", fontSize:26, fontWeight:900, cursor:"pointer",
+                boxShadow:"0 3px 8px rgba(255,150,0,0.4)", color:"#5d4037",
+                display:"flex", alignItems:"center", justifyContent:"center",
+              }}>{c}</button>
+            ))}
+        </div>
+        <div style={{ display:"flex", gap:7, marginTop:12 }}>
+          <button onClick={speakWord} disabled={!slots.length} style={{
+            flex:1, padding:"12px 6px",
+            background: slots.length ? "linear-gradient(135deg,#42a5f5,#1565c0)":"#e8e8e8",
+            color:"#fff", border:"none", borderRadius:14, fontSize:15, fontWeight:900,
+            cursor: slots.length ? "pointer":"default",
+            boxShadow: slots.length ? "0 4px 14px rgba(66,165,245,0.45)":"none",
+            transform: playing ? "scale(0.95)":"scale(1)", transition:"all 0.15s",
+          }}>🔊 よむ</button>
+          <button onClick={addFav} disabled={!slots.length} style={{
+            flex:1, padding:"12px 6px",
+            background: slots.length ? "linear-gradient(135deg,#f48fb1,#e91e63)":"#e8e8e8",
+            color:"#fff", border:"none", borderRadius:14, fontSize:15, fontWeight:900,
+            cursor: slots.length ? "pointer":"default",
+            boxShadow: slots.length ? "0 4px 14px rgba(233,30,99,0.4)":"none",
+          }}>⭐ お気に入り</button>
+          <button onClick={() => setSlots([])} disabled={!slots.length} style={{
+            padding:"12px 15px", background: slots.length ? "#ff7043":"#e8e8e8",
+            color:"#fff", border:"none", borderRadius:14, fontSize:18,
+            cursor: slots.length ? "pointer":"default",
+            boxShadow: slots.length ? "0 4px 12px rgba(255,112,67,0.4)":"none",
+          }}>🗑️</button>
+        </div>
+        {!!slots.length && <div style={{ fontSize:10, color:"#ccc", marginTop:6 }}>※ 文字をタップすると削除できます</div>}
+      </div>
+
+      {/* 速度調整 */}
+      <div style={{ margin:"0 12px 12px", background:"#fff", borderRadius:16, padding:"10px 14px", boxShadow:"0 2px 8px rgba(0,0,0,0.07)", border:"2px solid #ede7ff" }}>
+        <div style={{ fontSize:11, color:"#7986cb", fontWeight:700, marginBottom:7 }}>🐢 よむはやさ</div>
+        <div style={{ display:"flex", gap:6 }}>
+          {SPEEDS.map(s => (
+            <button key={s.value} onClick={() => setSpeed(s.value)} style={{
+              flex:1, padding:"8px 2px",
+              background: speed===s.value ? "linear-gradient(135deg,#9575cd,#512da8)":"#f5f5f5",
+              color: speed===s.value ? "#fff":"#999",
+              border:`2px solid ${speed===s.value ? "#9575cd":"#e8e8e8"}`,
+              borderRadius:10, fontSize:10, fontWeight:800, cursor:"pointer",
+              whiteSpace:"pre-line", lineHeight:1.4,
+              boxShadow: speed===s.value ? "0 3px 10px rgba(149,117,205,0.45)":"none",
+              transition:"all 0.15s",
+            }}>{s.label}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* タブ */}
+      <div style={{ display:"flex", margin:"0 12px 12px", gap:8 }}>
+        {[
+          { key:"kana", label:"🔤", sub:"ひらがな",   color:"#ff9a3c", bg:"linear-gradient(135deg,#ffcc80,#ff9a3c)" },
+          { key:"pics", label:"📷", sub:"ことばと絵", color:"#26a69a", bg:"linear-gradient(135deg,#80cbc4,#26a69a)" },
+        ].map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)} style={{
+            flex:1, padding:"11px 6px",
+            background: tab===t.key ? t.bg:"#fff",
+            color: tab===t.key ? "#fff":"#aaa",
+            border:`2.5px solid ${tab===t.key ? t.color:"#e8e8e8"}`,
+            borderRadius:16, cursor:"pointer",
+            boxShadow: tab===t.key ? `0 5px 16px ${t.color}55`:"0 2px 6px rgba(0,0,0,0.06)",
+            transition:"all 0.18s",
+            display:"flex", flexDirection:"column", alignItems:"center", gap:2,
+          }}>
+            <span style={{ fontSize:22 }}>{t.label}</span>
+            <span style={{ fontSize:11, fontWeight:800 }}>{t.sub}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* ひらがなタブ */}
+      {tab === "kana" && (
+        <div style={{ padding:"0 12px", display:"flex", flexDirection:"column", gap:8 }}>
+          {KANA_ROWS.map((row, idx) => {
+            const open = openRow === idx;
+            return (
+              <div key={row.row} style={{ background:"#fff", borderRadius:16, overflow:"hidden", boxShadow:`0 3px 10px ${row.color}28`, border:`2.5px solid ${open ? row.color:"#efefef"}`, transition:"border-color 0.2s" }}>
+                <button onClick={() => setOpenRow(open ? null : idx)} style={{
+                  width:"100%", padding:"12px 14px", background: open ? row.color:"#fff",
+                  border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"space-between",
+                }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <span style={{ fontSize:17, fontWeight:900, color: open ? "#fff":row.color }}>{row.row}</span>
+                    {!open && <span style={{ fontSize:13, color:"#bbb", letterSpacing:2 }}>{row.kana.slice(0,5).map(k=>k.char).join("・")}</span>}
+                  </div>
+                  <span style={{ fontSize:16, color: open ? "#fff":"#ccc", fontWeight:700 }}>{open ? "▲":"▼"}</span>
+                </button>
+                {open && (
+                  <div style={{ padding:"12px 12px 14px", display:"flex", flexDirection:"column", gap:12 }}>
+                    <div><div style={{ fontSize:10, color:"#aaa", marginBottom:6, fontWeight:700 }}>せいおん</div><KanaGroup items={row.kana} color={row.color} flash={flash} onPress={pressKana} /></div>
+                    {row.dakuten    && <div><div style={{ fontSize:10, color:"#aaa", marginBottom:6, fontWeight:700 }}>だくてん（゛）</div><KanaGroup items={row.dakuten}    color={row.color} flash={flash} onPress={pressKana} /></div>}
+                    {row.handakuten && <div><div style={{ fontSize:10, color:"#aaa", marginBottom:6, fontWeight:700 }}>はんだくてん（゜）</div><KanaGroup items={row.handakuten} color={row.color} flash={flash} onPress={pressKana} /></div>}
+                    {row.small      && <div><div style={{ fontSize:10, color:"#aaa", marginBottom:6, fontWeight:700 }}>こもじ</div><KanaGroup items={row.small}      color={row.color} flash={flash} onPress={pressKana} /></div>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ことばと絵タブ */}
+      {tab === "pics" && (
+        <div style={{ padding:"0 12px" }}>
+          <div style={{ background:"#fff", borderRadius:18, padding:"14px 16px", marginBottom:12, boxShadow:"0 3px 12px rgba(0,0,0,0.08)", border:"2px solid #e0f2f1" }}>
+            <div style={{ fontSize:12, color:"#26a69a", fontWeight:700, marginBottom:10 }}>📷 ことばと絵をついかする</div>
+            <input type="text" value={newWord} onChange={e => setNewWord(e.target.value)}
+              placeholder="ことばを入力（例：パンダ）"
+              style={{ width:"100%", padding:"10px 12px", fontSize:15, borderRadius:10, border:"2px solid #e0e0e0", marginBottom:10, outline:"none" }} />
+            <label style={{
+              display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+              width:"100%", padding:"12px 6px",
+              background: newWord.trim() ? "linear-gradient(135deg,#26a69a,#00695c)":"#e0e0e0",
+              color:"#fff", borderRadius:12, fontSize:14, fontWeight:800,
+              cursor: newWord.trim() ? "pointer":"default",
+            }}>
+              📁 写真をえらぶ
+              <input type="file" accept="image/*" onChange={handlePicUpload} disabled={!newWord.trim()} style={{ display:"none" }} />
+            </label>
+            {picMsg && <div style={{ fontSize:12, color:"#00897b", marginTop:8, fontWeight:700 }}>{picMsg}</div>}
+          </div>
+          {Object.keys(pics).length === 0 ? (
+            <div style={{ background:"#fff", borderRadius:20, padding:32, textAlign:"center", color:"#ccc", boxShadow:"0 2px 10px rgba(0,0,0,0.06)" }}>
+              <div style={{ fontSize:48, marginBottom:12 }}>📷</div>
+              <div style={{ fontSize:15 }}>まだ絵が登録されていません</div>
+              <div style={{ fontSize:12, marginTop:8 }}>上のフォームでことばと写真をついかしてね！</div>
+            </div>
+          ) : (
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(2, 1fr)", gap:10 }}>
+              {Object.entries(pics).map(([word, src]) => (
+                <div key={word} onClick={() => speak(word, speed)} style={{
+                  background:"#fff", borderRadius:16, overflow:"hidden",
+                  boxShadow:"0 3px 10px rgba(0,0,0,0.09)", border:"2px solid #e0f2f1",
+                  cursor:"pointer", position:"relative",
+                }}>
+                  <button onClick={e => { e.stopPropagation(); removePic(word); }} style={{
+                    position:"absolute", top:6, right:6, width:24, height:24, zIndex:2,
+                    background:"rgba(255,255,255,0.9)", border:"none", borderRadius:"50%",
+                    color:"#e53935", fontSize:13, fontWeight:900, cursor:"pointer",
+                    display:"flex", alignItems:"center", justifyContent:"center",
+                    boxShadow:"0 2px 6px rgba(0,0,0,0.2)",
+                  }}>✕</button>
+                  <img src={src} alt={word} style={{ width:"100%", height:120, objectFit:"contain", display:"block", background:"#f9f9f9" }} />
+                  <div style={{ padding:"8px 6px", textAlign:"center", fontSize:18, fontWeight:900, color:"#00897b", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                    🔊 {word}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
