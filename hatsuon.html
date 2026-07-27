@@ -160,12 +160,15 @@ function App() {
   const [favFilter, setFavFilter] = useState("すべて"); // フィルター
   const [sortMode, setSortMode]   = useState(() => { try { return localStorage.getItem("favSortMode1") || "auto"; } catch { return "auto"; } }); // "auto"（あいうえお順）| "manual"（スワイプ手動）
   const [dragId, setDragId]       = useState(null);
-  const [dragOffset, setDragOffset] = useState(0);
   const dragState = useRef({ id:null, startY:0, startIndex:0, appliedDiff:0, itemHeight:0 });
   const itemRefs  = useRef({});
+  const draggingRef = useRef(false); // ドラッグ中は保存を止めて、指を離した時に1回だけ保存する（連続書き込みによる引っかかり防止）
+  const dragOffsetRef = useRef(0); // ドラッグ中の見た目のズレ（再描画のたびに参照するが、この値自体の変化では再描画を起こさない）
+  const favsRef = useRef(favs);
+  const filteredFavsRef = useRef([]);
 
   useEffect(() => { window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices(); window.speechSynthesis.getVoices(); }, []);
-  useEffect(() => { try { localStorage.setItem("fav3",  JSON.stringify(favs)); } catch {} }, [favs]);
+  useEffect(() => { if (draggingRef.current) return; try { localStorage.setItem("fav3",  JSON.stringify(favs)); } catch {} }, [favs]);
   useEffect(() => { try { localStorage.setItem("pics1", JSON.stringify(pics)); } catch {} }, [pics]);
   useEffect(() => { try { localStorage.setItem("favSortMode1", sortMode); } catch {} }, [sortMode]);
 
@@ -200,47 +203,67 @@ function App() {
   const togglePin = (id) => setFavs(p => p.map(f => f.id===id ? { ...f, pinned: !f.pinned } : f));
 
   // スワイプでの手動並び替え
+  // 指の動きは window 全体で追跡する（小さい⠿アイコンの上だけで拾おうとすると、
+  // 並び替え中の再描画のタイミング次第でイベントを取りこぼし、途中で反応が止まることがあったため）
   const startDrag = (e, id) => {
     const el = itemRefs.current[id];
     if (!el) return;
     const rect = el.getBoundingClientRect();
+    draggingRef.current = true;
     dragState.current = {
-      id, startY: e.clientY, startIndex: favs.findIndex(f => f.id === id),
+      id, startY: e.clientY, startIndex: filteredFavsRef.current.findIndex(f => f.id === id),
       appliedDiff: 0, itemHeight: rect.height + 9, // 9 = リストのgap
     };
+    dragOffsetRef.current = 0;
     setDragId(id);
-    setDragOffset(0);
+    window.addEventListener("pointermove", onDragMove);
+    window.addEventListener("pointerup", endDrag);
+    window.addEventListener("pointercancel", endDrag);
   };
   const onDragMove = (e) => {
     const st = dragState.current;
     if (st.id == null) return;
     const rawOffset = e.clientY - st.startY;
-    setDragOffset(rawOffset);
+    dragOffsetRef.current = rawOffset;
+    // 1px動くたびに画面全体を再描画しないよう、移動中の見た目はReactの状態を介さず要素に直接反映する
+    const el = itemRefs.current[st.id];
+    if (el) el.style.transform = `translateY(${rawOffset}px) scale(1.02)`;
     const diff = Math.round(rawOffset / st.itemHeight);
     if (diff !== st.appliedDiff) {
-      const curIndex = favs.findIndex(f => f.id === st.id);
-      const newIndex = Math.max(0, Math.min(favs.length - 1, st.startIndex + diff));
+      const list = filteredFavsRef.current;
+      const curIndex = list.findIndex(f => f.id === st.id);
+      const newIndex = Math.max(0, Math.min(list.length - 1, st.startIndex + diff));
       if (newIndex !== curIndex && curIndex !== -1) {
-        const a = [...favs];
-        const [moved] = a.splice(curIndex, 1);
-        a.splice(newIndex, 0, moved);
-        setFavs(a);
+        // フィルター表示中の並び替え：フィルターに該当する項目だけを並べ替え、対象外の項目は元の位置のまま保つ
+        const visible = [...list];
+        const [moved] = visible.splice(curIndex, 1);
+        visible.splice(newIndex, 0, moved);
+        const visibleIds = new Set(visible.map(f => f.id));
+        let vi = 0;
+        const merged = favsRef.current.map(f => visibleIds.has(f.id) ? visible[vi++] : f);
+        setFavs(merged);
       }
       st.appliedDiff = diff;
     }
   };
   const endDrag = () => {
+    window.removeEventListener("pointermove", onDragMove);
+    window.removeEventListener("pointerup", endDrag);
+    window.removeEventListener("pointercancel", endDrag);
     dragState.current = { id:null, startY:0, startIndex:0, appliedDiff:0, itemHeight:0 };
     setDragId(null);
-    setDragOffset(0);
+    dragOffsetRef.current = 0;
+    draggingRef.current = false;
+    try { localStorage.setItem("fav3", JSON.stringify(favsRef.current)); } catch {}
   };
 
-  // ソート＆フィルター適用（手動モード中はフィルターなし・並び順は favs のまま）
+  // ソート＆フィルター適用（手動モード中も行フィルタは有効・並び順のベースは favs のまま）
   // ピン留め（★）したお気に入りを最優先で先頭に、その中はあいうえお順
   const sortedFavs = [...favs].sort((a,b) => (b.pinned?1:0) - (a.pinned?1:0) || compareKana(a.word, b.word));
-  const filteredFavs = sortMode === "manual"
-    ? favs
-    : (favFilter === "すべて" ? sortedFavs : sortedFavs.filter(f => getRowLabel(f.word) === favFilter));
+  const baseFavs = sortMode === "manual" ? favs : sortedFavs;
+  const filteredFavs = favFilter === "すべて" ? baseFavs : baseFavs.filter(f => getRowLabel(f.word) === favFilter);
+  favsRef.current = favs;
+  filteredFavsRef.current = filteredFavs;
 
   // フィルターに実際に該当する行ラベルだけ表示
   const usedLabels = ["すべて", ...FILTER_LABELS.slice(1).filter(l => favs.some(f => getRowLabel(f.word) === l))];
@@ -292,8 +315,8 @@ function App() {
         {favOpen && (
           <div style={{ padding:"0 12px 14px" }}>
 
-            {/* フィルターバー（あいうえお順モードのみ） */}
-            {sortMode === "auto" && favs.length > 0 && usedLabels.length > 2 && (
+            {/* フィルターバー（あいうえお順・手動どちらのモードでも表示） */}
+            {favs.length > 0 && usedLabels.length > 2 && (
               <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:10, marginBottom:4 }}>
                 {usedLabels.map(label => (
                   <button key={label} onClick={() => setFavFilter(label)} style={{
@@ -335,7 +358,7 @@ function App() {
                         boxShadow: dragging ? "0 8px 20px rgba(233,30,99,0.35)" : "0 3px 12px rgba(233,30,99,0.1)",
                         border: fav.pinned ? "2px solid #ffca28" : "2px solid #fce4ec",
                         position:"relative",
-                        transform: dragging ? `translateY(${dragOffset}px) scale(1.02)` : "none",
+                        transform: dragging ? `translateY(${dragOffsetRef.current}px) scale(1.02)` : "none",
                         zIndex: dragging ? 10 : 1,
                         transition: dragging ? "none" : "transform 0.18s, box-shadow 0.18s",
                       }}>
@@ -362,10 +385,7 @@ function App() {
                       {/* ドラッグハンドル（手動モードのみ・スワイプで並び替え） */}
                       {sortMode === "manual" && (
                         <div
-                          onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); startDrag(e, fav.id); }}
-                          onPointerMove={onDragMove}
-                          onPointerUp={endDrag}
-                          onPointerCancel={endDrag}
+                          onPointerDown={(e) => startDrag(e, fav.id)}
                           style={{
                             width:34, height:52, display:"flex", alignItems:"center", justifyContent:"center",
                             fontSize:24, color:"#90a4ae", cursor:"grab", touchAction:"none", userSelect:"none",
