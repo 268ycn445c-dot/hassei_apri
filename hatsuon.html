@@ -157,7 +157,8 @@ function App() {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed]     = useState(0.7);
   const [favOpen, setFavOpen] = useState(true);
-  const [favFilter, setFavFilter] = useState("すべて"); // フィルター
+  const [favFilter, setFavFilter] = useState("すべて"); // フィルター（行）
+  const [favView, setFavView]     = useState("all"); // "all" | "pinned"（★ピン留めだけ表示）
   const [sortMode, setSortMode]   = useState(() => { try { return localStorage.getItem("favSortMode1") || "auto"; } catch { return "auto"; } }); // "auto"（あいうえお順）| "manual"（スワイプ手動）
   const [dragId, setDragId]       = useState(null);
   const dragState = useRef({ id:null, startY:0, startIndex:0, appliedDiff:0, itemHeight:0 });
@@ -261,7 +262,9 @@ function App() {
   // ピン留め（★）したお気に入りを最優先で先頭に、その中はあいうえお順
   const sortedFavs = [...favs].sort((a,b) => (b.pinned?1:0) - (a.pinned?1:0) || compareKana(a.word, b.word));
   const baseFavs = sortMode === "manual" ? favs : sortedFavs;
-  const filteredFavs = favFilter === "すべて" ? baseFavs : baseFavs.filter(f => getRowLabel(f.word) === favFilter);
+  const rowFiltered = favFilter === "すべて" ? baseFavs : baseFavs.filter(f => getRowLabel(f.word) === favFilter);
+  const filteredFavs = favView === "pinned" ? rowFiltered.filter(f => f.pinned) : rowFiltered;
+  const pinnedCount = favs.filter(f => f.pinned).length;
   favsRef.current = favs;
   filteredFavsRef.current = filteredFavs;
 
@@ -315,8 +318,26 @@ function App() {
         {favOpen && (
           <div style={{ padding:"0 12px 14px" }}>
 
-            {/* フィルターバー（あいうえお順・手動どちらのモードでも表示） */}
-            {favs.length > 0 && usedLabels.length > 2 && (
+            {/* すべて / ★ピン留め タブ */}
+            {pinnedCount > 0 && (
+              <div style={{ display:"flex", borderRadius:20, border:"2px solid #f48fb1", overflow:"hidden", marginBottom:10 }}>
+                <button onClick={() => setFavView("all")} style={{
+                  flex:1, padding:"7px 10px", border:"none", cursor:"pointer",
+                  background: favView==="all" ? "linear-gradient(135deg,#f48fb1,#e91e63)":"#fff",
+                  color: favView==="all" ? "#fff":"#e91e63",
+                  fontSize:12, fontWeight:800,
+                }}>すべて（{favs.length}）</button>
+                <button onClick={() => setFavView("pinned")} style={{
+                  flex:1, padding:"7px 10px", border:"none", cursor:"pointer",
+                  background: favView==="pinned" ? "linear-gradient(135deg,#ffca28,#f9a825)":"#fff",
+                  color: favView==="pinned" ? "#fff":"#f9a825",
+                  fontSize:12, fontWeight:800,
+                }}>⭐ ピン留め（{pinnedCount}）</button>
+              </div>
+            )}
+
+            {/* フィルターバー（すべてタブのときのみ） */}
+            {favView === "all" && favs.length > 0 && usedLabels.length > 2 && (
               <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:10, marginBottom:4 }}>
                 {usedLabels.map(label => (
                   <button key={label} onClick={() => setFavFilter(label)} style={{
@@ -338,7 +359,7 @@ function App() {
               </div>
             ) : filteredFavs.length === 0 ? (
               <div style={{ textAlign:"center", padding:"16px 0", color:"#f8bbd0", fontSize:13 }}>
-                この行の登録はありません
+                {favView === "pinned" ? "★をつけたお気に入りはまだありません" : "この行の登録はありません"}
               </div>
             ) : (
               <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
