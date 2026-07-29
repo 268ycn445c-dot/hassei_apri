@@ -268,8 +268,9 @@ function App() {
   favsRef.current = favs;
   filteredFavsRef.current = filteredFavs;
 
-  // フィルターに実際に該当する行ラベルだけ表示
-  const usedLabels = ["すべて", ...FILTER_LABELS.slice(1).filter(l => favs.some(f => getRowLabel(f.word) === l))];
+  // フィルターに実際に該当する行ラベルだけ表示（ピン留めタブでは、ピン留めした単語の中だけで判定）
+  const favPoolForLabels = favView === "pinned" ? favs.filter(f => f.pinned) : favs;
+  const usedLabels = ["すべて", ...FILTER_LABELS.slice(1).filter(l => favPoolForLabels.some(f => getRowLabel(f.word) === l))];
 
   return (
     <div style={{ minHeight:"100vh", background:"#f5f0ff", paddingBottom:48 }}>
@@ -321,13 +322,13 @@ function App() {
             {/* すべて / ★ピン留め タブ */}
             {pinnedCount > 0 && (
               <div style={{ display:"flex", borderRadius:20, border:"2px solid #f48fb1", overflow:"hidden", marginBottom:10 }}>
-                <button onClick={() => setFavView("all")} style={{
+                <button onClick={() => { setFavView("all"); setFavFilter("すべて"); }} style={{
                   flex:1, padding:"7px 10px", border:"none", cursor:"pointer",
                   background: favView==="all" ? "linear-gradient(135deg,#f48fb1,#e91e63)":"#fff",
                   color: favView==="all" ? "#fff":"#e91e63",
                   fontSize:12, fontWeight:800,
                 }}>すべて（{favs.length}）</button>
-                <button onClick={() => setFavView("pinned")} style={{
+                <button onClick={() => { setFavView("pinned"); setFavFilter("すべて"); }} style={{
                   flex:1, padding:"7px 10px", border:"none", cursor:"pointer",
                   background: favView==="pinned" ? "linear-gradient(135deg,#ffca28,#f9a825)":"#fff",
                   color: favView==="pinned" ? "#fff":"#f9a825",
@@ -336,8 +337,8 @@ function App() {
               </div>
             )}
 
-            {/* フィルターバー（すべてタブのときのみ） */}
-            {favView === "all" && favs.length > 0 && usedLabels.length > 2 && (
+            {/* フィルターバー（すべて・ピン留めどちらのタブでも表示） */}
+            {favs.length > 0 && usedLabels.length > 2 && (
               <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:10, marginBottom:4 }}>
                 {usedLabels.map(label => (
                   <button key={label} onClick={() => setFavFilter(label)} style={{
