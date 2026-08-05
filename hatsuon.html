@@ -322,13 +322,13 @@ function App() {
             {/* すべて / ★ピン留め タブ */}
             {pinnedCount > 0 && (
               <div style={{ display:"flex", borderRadius:20, border:"2px solid #f48fb1", overflow:"hidden", marginBottom:10 }}>
-                <button onClick={() => { setFavView("all"); setFavFilter("すべて"); }} style={{
+                <button onClick={() => setFavView("all")} style={{
                   flex:1, padding:"7px 10px", border:"none", cursor:"pointer",
                   background: favView==="all" ? "linear-gradient(135deg,#f48fb1,#e91e63)":"#fff",
                   color: favView==="all" ? "#fff":"#e91e63",
                   fontSize:12, fontWeight:800,
                 }}>すべて（{favs.length}）</button>
-                <button onClick={() => { setFavView("pinned"); setFavFilter("すべて"); }} style={{
+                <button onClick={() => setFavView("pinned")} style={{
                   flex:1, padding:"7px 10px", border:"none", cursor:"pointer",
                   background: favView==="pinned" ? "linear-gradient(135deg,#ffca28,#f9a825)":"#fff",
                   color: favView==="pinned" ? "#fff":"#f9a825",
