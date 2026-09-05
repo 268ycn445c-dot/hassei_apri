@@ -117,12 +117,26 @@ function compareKana(a, b) {
   return a.length - b.length;
 }
 
+// 「しゅ」「きゃ」のような拗音は、音質の低いデフォルト音声だと2文字がバラバラに
+// 発音されてしまうことがある。Edgeの「Natural/Online」音声やGoogle音声は拗音の
+// つながりが自然なので、使える中で一番自然な音声を優先的に選ぶ。
+function pickJapaneseVoice(voices) {
+  const jp = voices.filter(v => v.lang === "ja-JP" || v.lang === "ja_JP");
+  if (!jp.length) return null;
+  const rank = (v) => {
+    if (/natural|online|neural/i.test(v.name)) return 0;
+    if (/google/i.test(v.name)) return 1;
+    return 2;
+  };
+  return [...jp].sort((a, b) => rank(a) - rank(b))[0];
+}
+
 function speak(text, rate) {
   if (!window.speechSynthesis) return;
   window.speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = "ja-JP"; u.rate = rate; u.pitch = 1.1; u.volume = 1;
-  const v = window.speechSynthesis.getVoices().find(v => v.lang === "ja-JP" || v.lang === "ja_JP");
+  const v = pickJapaneseVoice(window.speechSynthesis.getVoices());
   if (v) u.voice = v;
   window.speechSynthesis.speak(u);
 }
