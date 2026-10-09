@@ -7,6 +7,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<!-- Googleログイン＋家族きょうゆう（Firebase）。読みこめないとき（はじめてオフラインで開いた等）はこの端末だけで動く -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 body { background: #f5f0ff; font-family: 'Hiragino Sans','Yu Gothic',sans-serif; min-height: 100vh; }
@@ -16,9 +20,9 @@ button { font-family: inherit; }
 <body>
 <div id="root"></div>
 <script>
-if ("serviceWorker" in navigator) {
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
   });
 }
 </script>
@@ -195,6 +199,331 @@ function SpeedBar({ speed, setSpeed }) {
   );
 }
 
+// ================= Googleログイン＋家族きょうゆう（Firebase） =================
+// pecs-app・スケジュールアプリと同じ Firebase プロジェクト（pecs-family）を使う。Firestore の形：
+//   hatsuonFamilies/{fid}             allowedEmails, ownerUid, favs（お気に入りの配列）
+//   hatsuonFamilies/{fid}/pics/{id}   word, data（JPEGのdata URL）… 1MB制限に近づかないよう写真は1枚1ドキュメント
+// 並び替えモード（あいうえお順/手動）は端末ごとの設定のまま。
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyB3j4Sf0JVFDnBQDxge3EnA17hARnIUWno",
+  authDomain: "pecs-family.firebaseapp.com",
+  projectId: "pecs-family",
+  storageBucket: "pecs-family.firebasestorage.app",
+  messagingSenderId: "739244225472",
+  appId: "1:739244225472:web:6a8b0d912f600bc4698e25"
+};
+const FAMILY_KEY = "hatsuon-family-id";
+// PCのファイルを直接開いたときはGoogleログインが使えないので、今まで通りこの端末だけで動かす
+const CLOUD_AVAILABLE = (() => {
+  if (typeof firebase === "undefined" || location.protocol === "file:") return false;
+  try {
+    firebase.initializeApp(FIREBASE_CONFIG);
+    firebase.firestore().enablePersistence({ synchronizeTabs:true }).catch(() => {});
+    return true;
+  } catch { return false; }
+})();
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch {} };
+const picDocId = (word) => "w_" + encodeURIComponent(word).replace(/\./g, "%2E");
+const MAX_PIC_CHARS = 900000; // Firestore の1ドキュメント1MB制限より小さく
+
+// 写真を小さめのJPEGにする（きょうゆうのため。もとの写真はそのまま残らない）
+function compressImage(src, maxDim = 800, quality = 0.8) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(img.width * scale));
+      c.height = Math.max(1, Math.round(img.height * scale));
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => resolve(src);
+    img.src = src;
+  });
+}
+async function shrinkForCloud(src) {
+  let out = src;
+  for (const [dim, q] of [[800, 0.8], [600, 0.7], [400, 0.6]]) {
+    if (out.length <= MAX_PIC_CHARS) break;
+    out = await compressImage(src, dim, q);
+  }
+  return out;
+}
+
+function syncErrorMessage(e) {
+  const msg = (e && e.code === "permission-denied") ? "きょうゆうの けんげんが ありません" : "どうきが できませんでした";
+  return msg + (e && e.message ? `（${e.message}）` : "");
+}
+
+function useCloudSync({ favs, setFavs, pics, setPics, draggingRef, dragId }) {
+  const [authKnown, setAuthKnown] = useState(!CLOUD_AVAILABLE);
+  const [user, setUser]     = useState(null);
+  const [status, setStatus] = useState("off"); // off | connecting | ok | offline | error
+  const [error, setError]   = useState("");
+  const [emails, setEmails] = useState([]);
+  const [ready, setReady]   = useState(false);
+  const [picsReady, setPicsReady] = useState(false);
+  const latest = useRef({ favs, pics });
+  latest.current = { favs, pics };
+  const s = useRef({ famRef:null, unsubs:[], lastFavs:null, lastPics:{}, cloudPics:{}, uploading:{} });
+
+  const fail = (e) => { console.error(e); setStatus("error"); setError(syncErrorMessage(e)); };
+
+  const stopSync = () => {
+    s.current.unsubs.forEach(u => { try { u(); } catch {} });
+    s.current = { famRef:null, unsubs:[], lastFavs:null, lastPics:{}, cloudPics:{}, uploading:{} };
+    setReady(false); setPicsReady(false); setEmails([]);
+  };
+
+  const applyRemoteFavs = (remote) => {
+    const list = Array.isArray(remote) ? remote : [];
+    s.current.lastFavs = JSON.stringify(list);
+    setFavs(list);
+  };
+
+  // はじめてこの端末が、もうデータのある家族に入るとき：両方のお気に入り・写真をのこす
+  const mergeCloudIntoLocal = async (ref) => {
+    const [doc, picsSnap] = await Promise.all([ref.get(), ref.collection("pics").get()]);
+    const remoteFavs = (doc.data() || {}).favs || [];
+    const words = new Set(remoteFavs.map(f => f.word));
+    const merged = [...remoteFavs, ...latest.current.favs.filter(f => !words.has(f.word))];
+    const mergedPics = { ...latest.current.pics };
+    picsSnap.forEach(d => { const { word, data } = d.data(); if (word && data) mergedPics[word] = data; });
+    latest.current = { favs: merged, pics: mergedPics };
+    setFavs(merged); setPics(mergedPics);
+  };
+  const uploadFavs = (ref, isNew, email, uid) => {
+    const body = { favs: latest.current.favs, updatedAt: Date.now() };
+    return isNew
+      ? ref.set({ ownerUid: uid, allowedEmails: [email], createdAt: Date.now(), ...body })
+      : ref.update(body);
+  };
+
+  const uploadAllPics = (ref) => Promise.all(Object.entries(latest.current.pics).map(async ([word, data]) => {
+    const small = await shrinkForCloud(data);
+    await ref.collection("pics").doc(picDocId(word)).set({ word, data: small, updatedAt: Date.now() });
+  }));
+
+  const subscribe = (ref) => {
+    let gotMain = false, gotPics = false;
+    s.current.unsubs.push(ref.onSnapshot({ includeMetadataChanges:true }, (snap) => {
+      if (!snap.exists) { lsSet(FAMILY_KEY, null); return; } // 家族からはずされた（消された）：次回さがしなおす
+      const data = snap.data();
+      setEmails(data.allowedEmails || []);
+      // 並び替え中にとどいた変更は、指をはなしたあと自分の並びで上書きする
+      if (!snap.metadata.hasPendingWrites && !draggingRef.current) applyRemoteFavs(data.favs);
+      if (!gotMain) { gotMain = true; setReady(true); }
+      setStatus(snap.metadata.fromCache ? "offline" : "ok"); setError("");
+    }, (e) => { if (e && e.code === "permission-denied") lsSet(FAMILY_KEY, null); fail(e); }));
+    s.current.unsubs.push(ref.collection("pics").onSnapshot((qs) => {
+      if (!gotPics) {
+        // さいしょはクラウドの写真をそのまま使う（ほかの端末で消した写真が、もどってこないように）
+        gotPics = true;
+        const all = {};
+        qs.forEach(d => { const { word, data } = d.data(); if (word && data) all[word] = data; });
+        s.current.cloudPics = { ...all };
+        setPics(all);
+        setPicsReady(true);
+        return;
+      }
+      const add = {}, del = [];
+      qs.docChanges().forEach(ch => {
+        const { word, data } = ch.doc.data();
+        if (!word) return;
+        if (ch.type === "removed") { delete s.current.cloudPics[word]; del.push(word); return; }
+        if (ch.doc.metadata.hasPendingWrites) return;
+        s.current.cloudPics[word] = data;
+        if (latest.current.pics[word] !== data) add[word] = data;
+      });
+      if (Object.keys(add).length || del.length) {
+        setPics(p => { const n = { ...p, ...add }; del.forEach(w => delete n[w]); return n; });
+      }
+      setPicsReady(true);
+    }, fail));
+  };
+
+  const startSync = (u) => {
+    stopSync();
+    setStatus("connecting"); setError("");
+    const families = firebase.firestore().collection("hatsuonFamilies");
+    const email = (u.email || "").toLowerCase();
+    const stored = lsGet(FAMILY_KEY);
+    const linked = stored
+      ? Promise.resolve(families.doc(stored))
+      : families.where("allowedEmails", "array-contains", email).limit(1).get().then(async (qs) => {
+          if (!qs.empty) {
+            const ref = qs.docs[0].ref;
+            await mergeCloudIntoLocal(ref);
+            await uploadFavs(ref, false);
+            await uploadAllPics(ref);
+            return ref;
+          }
+          const created = families.doc();
+          await uploadFavs(created, true, email, u.uid);
+          await uploadAllPics(created);
+          return created;
+        });
+    linked.then((ref) => {
+      if (firebase.auth().currentUser !== u) return; // そのあいだにログアウトした
+      lsSet(FAMILY_KEY, ref.id);
+      s.current.famRef = ref;
+      subscribe(ref);
+    }).catch(fail);
+  };
+
+  useEffect(() => {
+    if (!CLOUD_AVAILABLE) return;
+    firebase.auth().getRedirectResult().catch(e => setError(`ログイン できませんでした（${e.message}）`));
+    return firebase.auth().onAuthStateChanged((u) => {
+      setAuthKnown(true);
+      setUser(u);
+      if (u) startSync(u);
+      else { stopSync(); setStatus("off"); }
+    });
+  }, []);
+
+  // 変わったところだけクラウドに書く
+  useEffect(() => {
+    const st = s.current, fam = st.famRef;
+    if (!fam || !ready || draggingRef.current) return;
+    const j = JSON.stringify(favs);
+    if (j !== st.lastFavs) {
+      st.lastFavs = j;
+      fam.update({ favs, updatedAt: Date.now() }).catch(fail);
+    }
+  }, [favs, ready, dragId]);
+
+  useEffect(() => {
+    const st = s.current, fam = st.famRef;
+    if (!fam || !picsReady) return;
+    Object.entries(pics).forEach(([word, data]) => {
+      if (st.cloudPics[word] === data || st.uploading[word]) return;
+      if (data.length > MAX_PIC_CHARS) { // むかし登録した大きい写真は、小さくしてから送る
+        st.uploading[word] = true;
+        shrinkForCloud(data).then(small => {
+          delete st.uploading[word];
+          setPics(p => p[word] === data ? { ...p, [word]: small } : p);
+        });
+        return;
+      }
+      st.uploading[word] = true;
+      fam.collection("pics").doc(picDocId(word)).set({ word, data, updatedAt: Date.now() })
+        .then(() => { st.cloudPics[word] = data; })
+        .catch(fail)
+        .then(() => { delete st.uploading[word]; });
+    });
+    // この端末で消した写真だけ、クラウドからも消す
+    Object.keys(st.lastPics).forEach(word => {
+      if (!(word in pics)) fam.collection("pics").doc(picDocId(word)).delete().catch(() => {});
+    });
+    st.lastPics = Object.fromEntries(Object.keys(pics).map(w => [w, true]));
+  }, [pics, picsReady]);
+
+  const signIn = () => {
+    setError("");
+    const provider = new firebase.auth.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt:"select_account" });
+    firebase.auth().signInWithPopup(provider).catch(e => {
+      if (e.code === "auth/popup-closed-by-user" || e.code === "auth/cancelled-popup-request") return;
+      // ホーム画面に追加したアプリなどではポップアップが使えないので、画面ごと移動してログインする
+      if (e.code === "auth/popup-blocked" || e.code === "auth/operation-not-supported-in-this-environment") {
+        return firebase.auth().signInWithRedirect(provider);
+      }
+      throw e;
+    }).catch(e => setError(`ログイン できませんでした（${e.message}）`));
+  };
+  const signOut = () => { lsSet(FAMILY_KEY, null); stopSync(); firebase.auth().signOut(); };
+  const addMember = (raw) => {
+    const email = (raw || "").trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "メールアドレスを たしかめてね";
+    if (emails.includes(email)) return "もう はいっています";
+    if (!s.current.famRef) return "まだ つながっていません";
+    s.current.famRef.update({ allowedEmails: firebase.firestore.FieldValue.arrayUnion(email) }).catch(fail);
+    return "";
+  };
+  const removeMember = (email) => {
+    const me = (user && user.email || "").toLowerCase();
+    if (emails.length <= 1 || email === me || !s.current.famRef) return;
+    s.current.famRef.update({ allowedEmails: firebase.firestore.FieldValue.arrayRemove(email) }).catch(fail);
+  };
+
+  return { available: CLOUD_AVAILABLE, authKnown, user, status, error, emails, signIn, signOut, addMember, removeMember };
+}
+
+function LoginGate({ cloud }) {
+  return (
+    <div style={{ minHeight:"100vh", background:"#f5f0ff", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div style={{ background:"#fff", borderRadius:22, padding:"28px 22px", maxWidth:380, width:"100%", textAlign:"center", boxShadow:"0 4px 20px rgba(233,30,99,0.15)", border:"3px solid #f48fb1" }}>
+        <div style={{ fontSize:48 }}>🎤</div>
+        <div style={{ fontSize:22, fontWeight:900, color:"#e91e63", margin:"6px 0 12px", letterSpacing:2 }}>はっせいれんしゅう</div>
+        {!cloud.authKnown ? (
+          <div style={{ fontSize:13, color:"#aaa", padding:"12px 0" }}>よみこみちゅう…</div>
+        ) : (<>
+          <div style={{ fontSize:13, color:"#666", lineHeight:1.7, marginBottom:18, textAlign:"left" }}>
+            Googleアカウントで ログインすると、ほかの ブラウザや かぞくの スマホと お気に入り・写真が きょうゆうされます。
+          </div>
+          <button onClick={cloud.signIn} style={{
+            width:"100%", padding:"14px 6px", background:"linear-gradient(135deg,#f48fb1,#e91e63)", color:"#fff",
+            border:"none", borderRadius:14, fontSize:16, fontWeight:900, cursor:"pointer", boxShadow:"0 4px 14px rgba(233,30,99,0.4)",
+          }}>Googleで ログイン</button>
+          {cloud.error && <div style={{ fontSize:12, color:"#e53935", marginTop:12 }}>{cloud.error}</div>}
+          {navigator.onLine === false && <div style={{ fontSize:12, color:"#e53935", marginTop:12 }}>インターネットに つないでから ログインしてね</div>}
+          <div style={{ fontSize:11, color:"#aaa", marginTop:14, lineHeight:1.6, textAlign:"left" }}>
+            はじめて ログインすると、この ブラウザの お気に入りと写真が そのまま つかわれます。
+          </div>
+        </>)}
+      </div>
+    </div>
+  );
+}
+
+const STATUS_LABEL = {
+  ok:"🟢 どうき できています", offline:"🟡 オフライン（つながったら どうき します）",
+  connecting:"🟡 つないでいます…", error:"🔴 どうき できていません", off:"⚪ ログイン していません",
+};
+const STATUS_DOT = { ok:"#66bb6a", offline:"#ffca28", connecting:"#ffca28", error:"#e53935", off:"#bdbdbd" };
+
+function ShareSheet({ cloud, onClose }) {
+  const [email, setEmail] = useState("");
+  const [msg, setMsg] = useState("");
+  const me = (cloud.user && cloud.user.email || "").toLowerCase();
+  const add = () => { const m = cloud.addMember(email); setMsg(m || "ついか しました"); if (!m) setEmail(""); };
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.35)", zIndex:100, display:"flex", alignItems:"flex-end", justifyContent:"center" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background:"#fff", width:"100%", maxWidth:520, borderRadius:"22px 22px 0 0", padding:"18px 18px 28px", maxHeight:"85vh", overflowY:"auto" }}>
+        <div style={{ display:"flex", alignItems:"center", marginBottom:12 }}>
+          <div style={{ flex:1, fontSize:18, fontWeight:900, color:"#e91e63" }}>☁️ きょうゆう</div>
+          <button onClick={onClose} style={{ width:32, height:32, borderRadius:"50%", border:"none", background:"#f5f5f5", fontSize:15, cursor:"pointer" }}>✕</button>
+        </div>
+        <div style={{ fontSize:14, fontWeight:700, marginBottom:6 }}>{STATUS_LABEL[cloud.status]}</div>
+        {cloud.status === "error" && cloud.error && <div style={{ fontSize:12, color:"#e53935", marginBottom:6 }}>{cloud.error}</div>}
+        <div style={{ fontSize:13, fontWeight:800, color:"#666", marginTop:14 }}>きょうゆう メンバー</div>
+        <div style={{ fontSize:11, color:"#999", margin:"2px 0 8px" }}>ここに いれた Googleアカウントで ログインすると、おなじ お気に入りと写真が みられます。</div>
+        <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+          {cloud.emails.map(e => (
+            <div key={e} style={{ display:"flex", alignItems:"center", gap:8, background:"#fafafa", borderRadius:10, padding:"8px 10px" }}>
+              <div style={{ flex:1, fontSize:13, wordBreak:"break-all" }}>{e}{e === me ? "（じぶん）" : ""}</div>
+              {e !== me && <button onClick={() => cloud.removeMember(e)} style={{ border:"2px solid #ff8a80", background:"#fff", color:"#e53935", borderRadius:12, fontSize:11, fontWeight:800, padding:"3px 10px", cursor:"pointer" }}>はずす</button>}
+            </div>
+          ))}
+        </div>
+        <div style={{ display:"flex", gap:6, marginTop:10 }}>
+          <input type="email" inputMode="email" autoComplete="off" value={email} onChange={e => setEmail(e.target.value)} placeholder="メールアドレス"
+            style={{ flex:1, minWidth:0, padding:"10px 12px", fontSize:15, borderRadius:10, border:"2px solid #e0e0e0", outline:"none" }} />
+          <button onClick={add} style={{ padding:"0 16px", background:"linear-gradient(135deg,#f48fb1,#e91e63)", color:"#fff", border:"none", borderRadius:10, fontSize:14, fontWeight:900, cursor:"pointer" }}>ついか</button>
+        </div>
+        {msg && <div style={{ fontSize:12, color:"#00897b", marginTop:6, fontWeight:700 }}>{msg}</div>}
+        <div style={{ fontSize:11, color:"#999", marginTop:22 }}>ログインちゅう: {cloud.user ? cloud.user.email : "-"}</div>
+        <button onClick={() => { onClose(); cloud.signOut(); }} style={{ marginTop:8, padding:"10px 16px", border:"2px solid #ff8a80", background:"#fff", color:"#e53935", borderRadius:12, fontSize:13, fontWeight:800, cursor:"pointer" }}>ログアウト</button>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [slots, setSlots]     = useState([]);
   const [favs, setFavs]       = useState(() => { try { return JSON.parse(localStorage.getItem("fav3")||"[]");  } catch { return []; } });
@@ -218,6 +547,8 @@ function App() {
   const dragOffsetRef = useRef(0); // ドラッグ中の見た目のズレ（再描画のたびに参照するが、この値自体の変化では再描画を起こさない）
   const favsRef = useRef(favs);
   const filteredFavsRef = useRef([]);
+  const [shareOpen, setShareOpen] = useState(false);
+  const cloud = useCloudSync({ favs, setFavs, pics, setPics, draggingRef, dragId });
 
   useEffect(() => { window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices(); window.speechSynthesis.getVoices(); }, []);
   useEffect(() => { if (draggingRef.current) return; try { localStorage.setItem("fav3",  JSON.stringify(favs)); } catch {} }, [favs]);
@@ -227,10 +558,11 @@ function App() {
   const handlePicUpload = (e) => {
     const file = e.target.files[0], word = newWord.trim();
     if (!file || !word) { setPicMsg("ことばと写真の両方を選んでね"); return; }
-    if (file.size > 1.5*1024*1024) { setPicMsg("写真が大きすぎます（1.5MB以下にしてね）"); return; }
+    if (file.size > 20*1024*1024) { setPicMsg("写真が大きすぎます（20MB以下にしてね）"); return; }
     const reader = new FileReader();
-    reader.onload = (ev) => {
-      setPics(p => ({ ...p, [word]: ev.target.result }));
+    reader.onload = async (ev) => {
+      const small = await compressImage(ev.target.result); // きょうゆうできるよう小さくする
+      setPics(p => ({ ...p, [word]: small }));
       setNewWord(""); setPicMsg(`「${word}」を登録しました！`);
       e.target.value = ""; setTimeout(() => setPicMsg(""), 2500);
     };
@@ -327,8 +659,12 @@ function App() {
   const favPoolForChars = favFilter === "すべて" ? [] : favPoolForLabels.filter(f => getRowLabel(f.word) === favFilter);
   const usedChars = Array.from(new Set(favPoolForChars.map(f => f.word[0]))).sort((a,b) => (KANA_INDEX[a] ?? 999) - (KANA_INDEX[b] ?? 999));
 
+  // ログインするまでは使えない（PCのファイルを直接開いたとき・Firebaseが読みこめないときは、この端末だけで使える）
+  if (cloud.available && !cloud.user) return <LoginGate cloud={cloud} />;
+
   return (
     <div style={{ minHeight:"100vh", background:"#f5f0ff", paddingBottom:48 }}>
+      {shareOpen && <ShareSheet cloud={cloud} onClose={() => setShareOpen(false)} />}
 
       {/* ヘッダー */}
       <div style={{ background:"linear-gradient(90deg,#ff7eb3,#ff9a3c)", padding:"14px 18px 12px", boxShadow:"0 4px 16px rgba(255,100,150,0.35)", display:"flex", alignItems:"center", gap:12 }}>
@@ -337,6 +673,12 @@ function App() {
           <div style={{ color:"#fff", fontSize:20, fontWeight:900, letterSpacing:2 }}>はっせいれんしゅう</div>
           <div style={{ color:"rgba(255,255,255,0.85)", fontSize:11 }}>ひらがなをおして ことばをつくろう！</div>
         </div>
+        {cloud.available && (
+          <button onClick={() => setShareOpen(true)} aria-label="きょうゆう" style={{
+            marginLeft:"auto", position:"relative", width:42, height:42, borderRadius:"50%", border:"none",
+            background:"rgba(255,255,255,0.3)", fontSize:22, cursor:"pointer", flexShrink:0,
+          }}>☁️<span style={{ position:"absolute", right:3, bottom:3, width:11, height:11, borderRadius:"50%", background:STATUS_DOT[cloud.status], border:"2px solid #fff" }} /></button>
+        )}
       </div>
 
       {/* 速度調整（お気に入りの上） */}
