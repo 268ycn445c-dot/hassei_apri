@@ -377,7 +377,6 @@ function useCloudSync({ favs, setFavs, pics, setPics, draggingRef, dragId }) {
 
   useEffect(() => {
     if (!CLOUD_AVAILABLE) return;
-    firebase.auth().getRedirectResult().catch(e => setError(`ログイン できませんでした（${e.message}）`));
     return firebase.auth().onAuthStateChanged((u) => {
       setAuthKnown(true);
       setUser(u);
@@ -427,14 +426,15 @@ function useCloudSync({ favs, setFavs, pics, setPics, draggingRef, dragId }) {
     setError("");
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.setCustomParameters({ prompt:"select_account" });
+    // iPhoneのSafariでは画面ごと移動するログイン（redirect）が「The requested action is invalid」で失敗するので、ポップアップだけを使う
     firebase.auth().signInWithPopup(provider).catch(e => {
       if (e.code === "auth/popup-closed-by-user" || e.code === "auth/cancelled-popup-request") return;
-      // ホーム画面に追加したアプリなどではポップアップが使えないので、画面ごと移動してログインする
-      if (e.code === "auth/popup-blocked" || e.code === "auth/operation-not-supported-in-this-environment") {
-        return firebase.auth().signInWithRedirect(provider);
+      if (e.code === "auth/popup-blocked") {
+        setError("ログイン画面が ひらけませんでした。もういちど「Googleで ログイン」を おしてね（iPhoneは 設定→Safari→ポップアップブロック を オフ）");
+        return;
       }
-      throw e;
-    }).catch(e => setError(`ログイン できませんでした（${e.message}）`));
+      setError(`ログイン できませんでした（${e.code || e.message}）`);
+    });
   };
   const signOut = () => { lsSet(FAMILY_KEY, null); stopSync(); firebase.auth().signOut(); };
   const addMember = (raw) => {
